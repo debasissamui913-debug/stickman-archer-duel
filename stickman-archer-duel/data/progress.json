@@ -1,0 +1,21 @@
+{
+  "coins": 22,
+  "highest_level": 21,
+  "player_name": "Player",
+  "opponent_name": "Rival",
+  "owned_skins": [
+    "classic",
+    "emerald"
+  ],
+  "equipped_skin": "emerald",
+  "owned_player_colors": [
+    "crimson_body",
+    "black"
+  ],
+  "equipped_player_color": "crimson_body",
+  "owned_backgrounds": [
+    "meadow",
+    "sunset"
+  ],
+  "equipped_background": "sunset"
+}
