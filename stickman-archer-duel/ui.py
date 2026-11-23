@@ -1,6 +1,8 @@
 import pygame
 import settings
-from draw_utils import draw_rounded_panel, draw_text_with_shadow
+from draw_utils import draw_rounded_panel, draw_text_with_shadow, draw_vertical_gradient
+
+
 class TextInputBox:
     def __init__(self, rect, font, initial_text="", max_length=14, placeholder=""):
         self.rect = pygame.Rect(rect)
@@ -63,7 +65,7 @@ class Button:
         self.text_color = text_color
         self.hovered = False
         self.enabled = enabled
-        self._hover_anim = 0.0  
+        self._hover_anim = 0.0
 
     def update(self, mouse_pos, dt=1 / 60):
         self.hovered = self.enabled and self.rect.collidepoint(mouse_pos)
@@ -92,6 +94,130 @@ class Button:
 
         text_color = self.text_color if self.enabled else (150, 150, 150)
         draw_text_with_shadow(surface, self.font, self.text, text_color, rect.center, center=True)
+
+
+class ToggleButton:
+    def __init__(self, rect, label, font, initial_state=True,
+                 on_color=settings.COLOR_ACCENT, off_color=(90, 95, 90),
+                 text_color=settings.COLOR_WHITE):
+        self.rect = pygame.Rect(rect)
+        self.label = label
+        self.font = font
+        self.state = bool(initial_state)
+        self.on_color = on_color
+        self.off_color = off_color
+        self.text_color = text_color
+        self.hovered = False
+        self._hover_anim = 0.0
+
+    def update(self, mouse_pos, dt=1 / 60):
+        self.hovered = self.rect.collidepoint(mouse_pos)
+        target = 1.0 if self.hovered else 0.0
+        self._hover_anim += (target - self._hover_anim) * min(1.0, dt * 12)
+
+    def handle_click(self, mouse_pos):
+        if self.rect.collidepoint(mouse_pos):
+            self.state = not self.state
+            return True
+        return False
+
+    def draw(self, surface):
+        grow = int(3 * self._hover_anim)
+        rect = self.rect.inflate(grow, grow)
+        base = self.on_color if self.state else self.off_color
+
+        draw_rounded_panel(surface, rect, (*base, 230), radius=10, shadow=True, shadow_offset=(0, 3))
+        border_color = settings.COLOR_WHITE if self.hovered else (255, 255, 255, 90)
+        pygame.draw.rect(surface, border_color, rect, width=2, border_radius=10)
+
+        status = "ON" if self.state else "OFF"
+        display = f"{self.label}: {status}"
+        draw_text_with_shadow(surface, self.font, display, self.text_color, rect.center, center=True)
+
+
+class SettingsMenu:
+    def __init__(self, font_title, font_option, font_button, current_settings=None):
+        self.font_title = font_title
+        self.font_option = font_option
+        self.font_button = font_button
+
+        opts = current_settings or {}
+        self.values = {
+            "sound": opts.get("sound", True),
+            "turn_timer": opts.get("turn_timer", True),
+            "screen_shake": opts.get("screen_shake", True),
+            "show_name_tags": opts.get("show_name_tags", True),
+        }
+
+        panel_w, panel_h = 460, 420
+        px = (settings.SCREEN_WIDTH - panel_w) // 2
+        py = (settings.SCREEN_HEIGHT - panel_h) // 2
+        self.panel_rect = pygame.Rect(px, py, panel_w, panel_h)
+
+        toggle_w, toggle_h = 360, 46
+        tx = self.panel_rect.centerx - toggle_w // 2
+        start_y = self.panel_rect.y + 85
+        gap = 58
+
+        self.toggles = {
+            "sound": ToggleButton((tx, start_y + gap * 0, toggle_w, toggle_h), "Sound Effects", font_option, self.values["sound"]),
+            "turn_timer": ToggleButton((tx, start_y + gap * 1, toggle_w, toggle_h), "Turn Timer", font_option, self.values["turn_timer"]),
+            "screen_shake": ToggleButton((tx, start_y + gap * 2, toggle_w, toggle_h), "Screen Shake", font_option, self.values["screen_shake"]),
+            "show_name_tags": ToggleButton((tx, start_y + gap * 3, toggle_w, toggle_h), "Name Tags", font_option, self.values["show_name_tags"]),
+        }
+
+        self.back_button = Button(
+            (self.panel_rect.centerx - 90, self.panel_rect.bottom - 64, 180, 44),
+            "DONE",
+            font_button,
+        )
+
+    def update(self, mouse_pos, dt=1 / 60):
+        for toggle in self.toggles.values():
+            toggle.update(mouse_pos, dt)
+        self.back_button.update(mouse_pos, dt)
+
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self._sync_values()
+            return "close"
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            pos = event.pos
+            for key, toggle in self.toggles.items():
+                if toggle.handle_click(pos):
+                    self.values[key] = toggle.state
+            if self.back_button.is_clicked(pos):
+                self._sync_values()
+                return "close"
+
+        return None
+
+    def _sync_values(self):
+        for key, toggle in self.toggles.items():
+            self.values[key] = toggle.state
+
+    def draw(self, surface):
+        dim = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 140))
+        surface.blit(dim, (0, 0))
+
+        draw_rounded_panel(surface, self.panel_rect, (28, 32, 30, 240), radius=18, shadow=True, shadow_offset=(0, 6))
+        pygame.draw.rect(surface, settings.COLOR_ACCENT, self.panel_rect, width=2, border_radius=18)
+
+        draw_text_with_shadow(
+            surface,
+            self.font_title,
+            "SETTINGS",
+            settings.COLOR_WHITE,
+            (self.panel_rect.centerx, self.panel_rect.y + 42),
+            center=True,
+        )
+
+        for toggle in self.toggles.values():
+            toggle.draw(surface)
+
+        self.back_button.draw(surface)
 
 
 def draw_coin_badge(surface, font, coins, pos=(20, 20)):
@@ -230,6 +356,7 @@ def draw_streak_badge(surface, font, streak, pos):
     draw_rounded_panel(surface, bg_rect, (30, 30, 30, 200), radius=10)
     surface.blit(surf, rect)
 
+
 def _draw_card_frame(surface, rect, owned, equipped):
     x, y, w, h = rect
     bg_color = (60, 80, 50, 240) if equipped else (40, 46, 40, 230)
@@ -292,7 +419,6 @@ def draw_background_card(surface, rect, font_name, font_small, item, owned, equi
     _draw_card_frame(surface, rect, owned, equipped)
 
     preview_rect = (x + w // 2 - 45, y + 24, 90, 44)
-    from draw_utils import draw_vertical_gradient
     draw_vertical_gradient(surface, preview_rect, item["sky_top"], item["ground_bottom"])
     pygame.draw.rect(surface, settings.COLOR_WHITE, preview_rect, width=2, border_radius=4)
 
