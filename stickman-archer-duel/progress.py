@@ -3,6 +3,7 @@ import os
 import settings
 DEFAULT_DATA = {
     "coins": 0,
+    "shields": 0,
     "highest_level": 1,
     "player_name": settings.DEFAULT_PLAYER_NAME,
     "opponent_name": settings.DEFAULT_OPPONENT_NAME,
@@ -32,6 +33,7 @@ def load():
 
         return {
             "coins": int(data.get("coins", 0)),
+            "shields": max(0, int(data.get("shields", 0))),
             "highest_level": int(data.get("highest_level", 1)),
             "player_name": data.get("player_name", settings.DEFAULT_PLAYER_NAME) or settings.DEFAULT_PLAYER_NAME,
             "opponent_name": data.get("opponent_name", settings.DEFAULT_OPPONENT_NAME) or settings.DEFAULT_OPPONENT_NAME,
@@ -54,3 +56,11 @@ def save(data):
     except OSError:
         pass
     return data
+
+
+def reset():
+    data = {
+        key: value.copy() if isinstance(value, list) else value
+        for key, value in DEFAULT_DATA.items()
+    }
+    return save(data)

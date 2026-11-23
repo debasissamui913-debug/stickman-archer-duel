@@ -116,8 +116,13 @@ SHOP_ITEMS = [
     {"id": "emerald",   "name": "Emerald",     "cost": 90,  "bow_color": (20, 90, 45),  "arrow_color": (80, 220, 130)},
     {"id": "gold",      "name": "Golden",      "cost": 150, "bow_color": (150, 120, 20),"arrow_color": (255, 210, 60)},
     {"id": "shadow",    "name": "Shadow",      "cost": 200, "bow_color": (25, 25, 30),  "arrow_color": (120, 60, 200)},
+    {"id": "godly",     "name": "Godly",       "cost": 0,   "bow_color": (255, 220, 100), "arrow_color": (110, 245, 255), "code_required": True},
 ]
 DEFAULT_SKIN_ID = "classic"
+
+SHIELD_ITEMS = [
+    {"id": "guardian_shield", "name": "Guardian Shield", "cost": 35, "color": (110, 220, 245)},
+]
 
 
 PLAYER_COLOR_ITEMS = [
