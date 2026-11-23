@@ -12,15 +12,18 @@ class Player:
         self.drag_current = pygame.math.Vector2(0, 0)
         self.bow_color = settings.SHOP_ITEMS[0]["bow_color"]
         self.arrow_color = settings.SHOP_ITEMS[0]["arrow_color"]
+        self.skin_id = settings.DEFAULT_SKIN_ID
+        self.animation_time = 0.0
         self.body_color = settings.PLAYER_COLOR_ITEMS[0]["color"]
 
         self.last_aim_angle = 35  
         self.alive = True
         self.hit_flash_timer = 0.0
 
-    def set_skin(self, bow_color, arrow_color):
+    def set_skin(self, bow_color, arrow_color, skin_id=settings.DEFAULT_SKIN_ID):
         self.bow_color = bow_color
         self.arrow_color = arrow_color
+        self.skin_id = skin_id
 
     def set_body_color(self, color):
         self.body_color = color
@@ -95,6 +98,7 @@ class Player:
         return self.hand_pos.copy(), velocity
 
     def update(self, dt):
+        self.animation_time += dt
         if self.hit_flash_timer > 0:
             self.hit_flash_timer -= dt
 
@@ -111,7 +115,8 @@ class Player:
         color = (255, 255, 255) if self.hit_flash_timer > 0 else self.body_color
         stickman.draw_stickman(
             surface, self.feet_pos, facing=self.facing, pose=pose, color=color,
-            aim_angle=angle, bow_color=self.bow_color,
+            aim_angle=angle, bow_color=self.bow_color, skin_id=self.skin_id,
+            animation_time=self.animation_time,
         )
 
     def draw_trajectory_preview(self, surface):

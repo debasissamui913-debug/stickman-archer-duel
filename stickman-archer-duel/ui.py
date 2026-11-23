@@ -1,3 +1,4 @@
+import math
 import pygame
 import settings
 from draw_utils import draw_rounded_panel, draw_text_with_shadow, draw_vertical_gradient
@@ -371,6 +372,8 @@ def _draw_card_status(surface, rect, font_small, item, owned, equipped, affordab
         status_text, status_color = "EQUIPPED", settings.COLOR_ACCENT
     elif owned:
         status_text, status_color = "OWNED - TAP TO EQUIP", (180, 220, 180)
+    elif item.get("code_required"):
+        status_text, status_color = "CODE REQUIRED", (130, 225, 255)
     elif affordable:
         status_text, status_color = f"{item['cost']} coins - TAP TO BUY", settings.COLOR_COIN
     else:
@@ -380,11 +383,21 @@ def _draw_card_status(surface, rect, font_small, item, owned, equipped, affordab
     surface.blit(status_surf, status_rect)
 
 
-def draw_skin_card(surface, rect, font_name, font_small, item, owned, equipped, affordable):
+def draw_skin_card(surface, rect, font_name, font_small, item, owned, equipped, affordable, animation_time=0.0):
     x, y, w, h = rect
     _draw_card_frame(surface, rect, owned, equipped)
 
     preview_cx, preview_cy = x + w // 2, y + 46
+    if item["id"] == "godly":
+        glow = pygame.Surface((80, 80), pygame.SRCALPHA)
+        pulse = int(25 + 18 * (0.5 + 0.5 * math.sin(animation_time * 3)))
+        pygame.draw.circle(glow, (100, 220, 255, pulse), (40, 40), 38)
+        surface.blit(glow, (preview_cx - 40, preview_cy - 40))
+        for i in range(3):
+            angle = animation_time * (1.2 + i * 0.25) + i * math.tau / 3
+            px = preview_cx + math.cos(angle) * 31
+            py = preview_cy + math.sin(angle) * 22
+            pygame.draw.circle(surface, (180, 250, 255), (int(px), int(py)), 2 + i % 2)
     pygame.draw.line(surface, item["bow_color"], (preview_cx - 18, preview_cy - 20), (preview_cx - 18, preview_cy + 20), 4)
     pygame.draw.line(surface, item["arrow_color"], (preview_cx - 25, preview_cy), (preview_cx + 20, preview_cy), 4)
     pygame.draw.polygon(
@@ -397,6 +410,31 @@ def draw_skin_card(surface, rect, font_name, font_small, item, owned, equipped, 
     surface.blit(name_surf, name_rect)
 
     _draw_card_status(surface, rect, font_small, item, owned, equipped, affordable)
+
+def draw_shield_card(surface, rect, font_name, font_small, item, shield_count, affordable):
+    x, y, w, h = rect
+    _draw_card_frame(surface, rect, shield_count > 0, False)
+
+    cx, cy = x + w // 2, y + 52
+    color = item["color"]
+    points = [
+        (cx, cy - 29), (cx + 24, cy - 20), (cx + 20, cy + 6),
+        (cx, cy + 28), (cx - 20, cy + 6), (cx - 24, cy - 20),
+    ]
+    pygame.draw.polygon(surface, color, points, width=3)
+    pygame.draw.line(surface, (205, 250, 255), (cx, cy - 19), (cx, cy + 17), 2)
+    pygame.draw.line(surface, (205, 250, 255), (cx - 14, cy - 7), (cx + 14, cy - 7), 2)
+
+    name_surf = font_name.render(item["name"], True, settings.COLOR_WHITE)
+    surface.blit(name_surf, name_surf.get_rect(center=(cx, y + 99)))
+    status = f"{shield_count} IN INVENTORY - TAP TO BUY" if shield_count else (
+        f"{item['cost']} coins - TAP TO BUY" if affordable else f"{item['cost']} coins"
+    )
+    status_color = (180, 220, 180) if shield_count else (
+        settings.COLOR_COIN if affordable else (150, 150, 150)
+    )
+    status_surf = font_small.render(status, True, status_color)
+    surface.blit(status_surf, status_surf.get_rect(center=(cx, y + h - 17)))
 
 
 def draw_color_card(surface, rect, font_name, font_small, item, owned, equipped, affordable):

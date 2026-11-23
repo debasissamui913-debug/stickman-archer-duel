@@ -12,6 +12,7 @@ from opponent import Opponent
 from arrow import Arrow
 from effects import EffectsManager
 import ui
+import stickman
 from ui import Button, TextInputBox
 from draw_utils import draw_text_with_shadow, draw_outlined_text, draw_rounded_panel
 import progress
@@ -47,6 +48,7 @@ class Game:
         self._font_headshot = pygame.font.SysFont("consolas", 22, bold=True)
         self._font_name = pygame.font.SysFont("consolas", 15, bold=True)
         self.fonts = {"body": self._font_body, "headshot": self._font_headshot, "small": self._font_small}
+        self.animation_time = 0.0
 
         # Progress / Shop
         self.progress_data = progress.load()
@@ -57,13 +59,17 @@ class Game:
 
         # Core gameplay objects
         self.player = Player(self.sounds)
-        self.player.set_skin(*self.shop.get_equipped_bow_colors())
+        self.player.set_skin(
+            *self.shop.get_equipped_bow_colors(),
+            skin_id=self.shop.equipped_id("bow"),
+        )
         self.player.set_body_color(self.shop.get_equipped_player_color())
         self.opponent = Opponent()
         self.effects = EffectsManager()
 
         self.player_arrow = None
         self.enemy_arrows = []
+        self.player_guard_zone = None
 
         self.level_number = 1
         self.player_hp = settings.PLAYER_MAX_HP
@@ -78,12 +84,15 @@ class Game:
         self._complete_particles_spawned = False
 
         self.pause_button_rect = pygame.Rect(settings.SCREEN_WIDTH - 64, 16, 44, 44)
+        self.guard_head_button = Button((866, 16, 158, 44), "HEAD 0", self._font_small)
+        self.guard_body_button = Button((1032, 16, 158, 44), "BODY 0", self._font_small)
         self.world_surface = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT))
 
         self.state = GameState.MENU
         self._previous_state = GameState.MENU
         self._state_before_pause = GameState.PLAYING
         self._settings_return_state = GameState.MENU
+        self._confirming_data_reset = False
         self.shop_tab = "bow"
 
         self.menu_buttons = self._build_menu_buttons()
@@ -91,12 +100,30 @@ class Game:
         self.level_complete_buttons = self._build_level_complete_buttons()
         self.level_failed_buttons = self._build_level_failed_buttons()
         self.settings_widgets = self._build_settings_widgets()
+        self.reset_cancel_button = Button(
+            (settings.SCREEN_WIDTH // 2 - 200, 400, 180, 50),
+            "CANCEL", self._font_button,
+        )
+        self.reset_confirm_button = Button(
+            (settings.SCREEN_WIDTH // 2 + 20, 400, 180, 50),
+            "RESET", self._font_button, base_color=(145, 50, 45),
+        )
         self.shop_back_button = Button(
             (settings.SCREEN_WIDTH // 2 - 130, settings.SCREEN_HEIGHT - 70, 260, 50),
             "BACK", self._font_button
         )
         self.shop_tab_buttons = self._build_shop_tab_buttons()
         self._shop_card_layout = self._build_shop_layout("bow")
+        self.godly_code_input = TextInputBox(
+            (settings.SCREEN_WIDTH // 2 - 180, 166, 300, 40), self._font_body,
+            max_length=12, placeholder="Enter unlock code",
+        )
+        self.godly_code_button = Button(
+            (settings.SCREEN_WIDTH // 2 + 130, 166, 170, 40),
+            "UNLOCK", self._font_small,
+        )
+        self._godly_code_message = ""
+        self._shop_message = ""
 
         self.player_name_input = TextInputBox(
             (settings.SCREEN_WIDTH // 2 - 260, 246, 240, 40), self._font_body,
@@ -141,6 +168,7 @@ class Game:
                 self._events_info_screen(event)
 
     def _update(self, dt):
+        self.animation_time += dt
         self.background.update(dt)
         self.player.update(dt)
 
@@ -161,7 +189,10 @@ class Game:
         elif self.state == GameState.LEVEL_FAILED:
             self._update_buttons(self.level_failed_buttons.values(), dt)
         elif self.state == GameState.SHOP:
-            self._update_buttons([self.shop_back_button, *self.shop_tab_buttons.values()], dt)
+            self._update_buttons(
+                [self.shop_back_button, self.godly_code_button, *self.shop_tab_buttons.values()], dt
+            )
+            self.godly_code_input.update(dt)
         elif self.state == GameState.SETTINGS:
             self._update_settings_buttons(dt)
 
@@ -320,6 +351,7 @@ class Game:
 
         self.player_arrow = None
         self.enemy_arrows = []
+        self.player_guard_zone = None
         self.player.reset_combat_state()
         self.player.facing = 1
         self.opponent.aiming = False
@@ -348,6 +380,12 @@ class Game:
             return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.guard_head_button.is_clicked(event.pos):
+                self._activate_player_guard("head")
+                return
+            if self.guard_body_button.is_clicked(event.pos):
+                self._activate_player_guard("body")
+                return
             if self.pause_button_rect.collidepoint(event.pos):
                 self.sounds.play("button_click")
                 self._state_before_pause = GameState.PLAYING
@@ -366,10 +404,38 @@ class Game:
                 if result:
                     pos, velocity = result
                     _, arrow_color = self.shop.get_equipped_bow_colors()
-                    self.player_arrow = Arrow(pos, velocity, arrow_color, wind_force=self.current_wind_force)
+                    self.player_arrow = Arrow(
+                        pos, velocity, arrow_color, wind_force=self.current_wind_force,
+                        skin_id=self.shop.equipped_id("bow"),
+                    )
                     self.sounds.play("bow_shoot")
 
+    def _activate_player_guard(self, zone):
+        if self.turn != "player" or self.player_guard_zone or self.shop.shields <= 0:
+            return
+        self.shop.shields -= 1
+        self.player_guard_zone = zone
+        self._save_progress()
+        self.sounds.play("button_click")
+        position = self.player.head_pos if zone == "head" else self.player.body_pos
+        self.effects.spawn_burst(position, (110, 220, 245), count=18, speed_range=(70, 180))
+        self.effects.spawn_text(position, f"{zone.upper()} GUARD!", (170, 245, 255), life=0.9)
+
     def _update_playing(self, dt):
+        can_activate_guard = self.turn == "player" and self.player_guard_zone is None and self.shop.shields > 0
+        self.guard_head_button.enabled = can_activate_guard
+        self.guard_body_button.enabled = can_activate_guard
+        self.guard_head_button.text = (
+            "HEAD BLOCKED" if self.player_guard_zone == "head"
+            else f"HEAD: {self.shop.shields}"
+        )
+        self.guard_body_button.text = (
+            "BODY BLOCKED" if self.player_guard_zone == "body"
+            else f"BODY: {self.shop.shields}"
+        )
+        mouse_pos = pygame.mouse.get_pos()
+        self.guard_head_button.update(mouse_pos, dt)
+        self.guard_body_button.update(mouse_pos, dt)
         self.opponent.update(dt)
 
         if self.player_arrow:
@@ -550,14 +616,19 @@ class Game:
         if not self.enemy_arrows and self.turn == "opponent" and self.enemy_turn_timer <= 0 and not self.opponent.aiming:
             self.turn = "player"
             self.player_turn_timer = settings.PLAYER_TURN_TIME_LIMIT
+            self.player_guard_zone = None
 
     def _evaluate_enemy_arrow(self, arrow):
         if self.player.alive:
             head_dist = (arrow.pos - self.player.head_pos).length()
             if head_dist <= settings.HEAD_RADIUS + settings.ARROW_RADIUS:
+                if self.player_guard_zone == "head":
+                    return "blocked"
                 return "headshot"
             body_dist = (arrow.pos - self.player.body_pos).length()
             if body_dist <= settings.BODY_HIT_RADIUS + settings.ARROW_RADIUS:
+                if self.player_guard_zone == "body":
+                    return "blocked"
                 return "hit"
 
         if arrow.pos.y >= settings.GROUND_Y or not arrow.active:
@@ -592,6 +663,13 @@ class Game:
                 self.player.register_defeat()
                 self._lose_level()
 
+        elif result == "blocked":
+            block_pos = self.player.head_pos if self.player_guard_zone == "head" else self.player.body_pos
+            self.sounds.play("blocked")
+            self.effects.spawn_burst(block_pos, (110, 220, 245), count=16, speed_range=(70, 190))
+            self.effects.spawn_text(block_pos, "BLOCKED!", (170, 245, 255), life=0.8)
+            self.effects.shake.trigger(2, 0.1)
+
         else:  
             self.sounds.play("miss")
             self.effects.spawn_text((impact_pos.x, settings.GROUND_Y - 10), "MISS", settings.COLOR_MISS, life=0.7)
@@ -607,6 +685,8 @@ class Game:
             arrow.draw(world)
         self.player.draw_trajectory_preview(world)
         self.player.draw(world)
+        if self.player_guard_zone:
+            self._draw_player_guard(world)
 
         ui.draw_name_tag(world, self._font_name, self.shop.player_name, (self.player.feet_pos.x, self.player.feet_pos.y - 145))
         ui.draw_name_tag(world, self._font_name, self.shop.opponent_name, (self.opponent.feet_pos.x, self.opponent.feet_pos.y - 145))
@@ -637,7 +717,21 @@ class Game:
                 ui.draw_turn_timer(self.screen, self.player_turn_timer, settings.PLAYER_TURN_TIME_LIMIT, warning)
 
             mouse_pos = pygame.mouse.get_pos()
+            self.guard_head_button.draw(self.screen)
+            self.guard_body_button.draw(self.screen)
             ui.draw_pause_button(self.screen, self.pause_button_rect, self.pause_button_rect.collidepoint(mouse_pos))
+
+    def _draw_player_guard(self, surface):
+        center = self.player.head_pos if self.player_guard_zone == "head" else self.player.body_pos
+        radius = 23 if self.player_guard_zone == "head" else 34
+        pulse = 0.5 + 0.5 * math.sin(self.animation_time * 5)
+        glow = pygame.Surface((radius * 4, radius * 4), pygame.SRCALPHA)
+        glow_center = (radius * 2, radius * 2)
+        glow_radius = int(radius * (1.3 + 0.08 * pulse))
+        pygame.draw.circle(glow, (90, 215, 245, int(25 + 25 * pulse)), glow_center, glow_radius)
+        surface.blit(glow, (int(center.x) - radius * 2, int(center.y) - radius * 2))
+        pygame.draw.circle(surface, (125, 230, 255), center, radius, 2)
+        pygame.draw.circle(surface, (210, 250, 255), center, max(2, radius - 5), 1)
 
     
     def _build_pause_buttons(self):
@@ -750,11 +844,14 @@ class Game:
 
     
     def _build_shop_tab_buttons(self):
-        w, h, gap = 180, 44, 12
-        total = w * 3 + gap * 2
+        w, h, gap = 150, 44, 10
+        total = w * 4 + gap * 3
         start_x = (settings.SCREEN_WIDTH - total) // 2
         y = 110
-        labels = [("bow", "BOW"), ("color", "COLOR"), ("background", "BACKGROUND")]
+        labels = [
+            ("bow", "BOW"), ("color", "COLOR"),
+            ("background", "BACKGROUND"), ("shield", "SHIELDS"),
+        ]
         buttons = {}
         for i, (key, label) in enumerate(labels):
             rect = (start_x + i * (w + gap), y, w, h)
@@ -766,14 +863,17 @@ class Game:
             "bow": settings.SHOP_ITEMS,
             "color": settings.PLAYER_COLOR_ITEMS,
             "background": settings.BACKGROUND_THEMES,
+            "shield": settings.SHIELD_ITEMS,
         }[category]
 
-        cols = 3
-        card_w, card_h = 220, 150
-        gap_x, gap_y = 30, 26
+        cols = 1 if category == "shield" else (4 if category == "bow" else 3)
+        card_w, card_h = (260, 175) if category == "shield" else (
+            (185, 132) if category == "bow" else (220, 150)
+        )
+        gap_x, gap_y = (30, 26) if category != "bow" else (14, 14)
         total_w = cols * card_w + (cols - 1) * gap_x
         start_x = (settings.SCREEN_WIDTH - total_w) // 2
-        start_y = 180
+        start_y = 270 if category == "shield" else 225
 
         layout = []
         for i, item in enumerate(catalog):
@@ -784,10 +884,30 @@ class Game:
         return layout
 
     def _events_shop(self, event):
+        if event.type == pygame.KEYDOWN and self.shop_tab == "bow" and self.godly_code_input.active:
+            if event.key == pygame.K_RETURN:
+                self._unlock_godly_bow()
+            elif event.key == pygame.K_ESCAPE:
+                self.godly_code_input.active = False
+            else:
+                self.godly_code_input.handle_key(event)
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.shop_tab == "bow":
+                code_field_clicked = self.godly_code_input.rect.collidepoint(event.pos)
+                self.godly_code_input.handle_click(event.pos)
+                if code_field_clicked:
+                    return
+
             if self.shop_back_button.is_clicked(event.pos):
                 self.sounds.play("button_click")
                 self.state = GameState.MENU
+                return
+
+            if self.shop_tab == "bow" and self.godly_code_button.is_clicked(event.pos):
+                self.sounds.play("button_click")
+                self._unlock_godly_bow()
                 return
 
             for key, button in self.shop_tab_buttons.items():
@@ -802,8 +922,35 @@ class Game:
                     self._handle_shop_card_click(item["id"])
                     break
 
+    def _unlock_godly_bow(self):
+        if self.godly_code_input.text.strip() != "12345":
+            self._godly_code_message = "Invalid code."
+            self.sounds.play("button_click")
+            return
+        if self.shop.is_owned("bow", "godly"):
+            self._godly_code_message = "Godly bow already unlocked."
+            self.sounds.play("button_click")
+            return
+        self.shop.unlock("bow", "godly")
+        self._save_progress()
+        self.godly_code_input.text = ""
+        self.godly_code_input.active = False
+        self._godly_code_message = "Godly bow unlocked! Tap its card to equip."
+        self.sounds.play("purchase")
+
     def _handle_shop_card_click(self, item_id):
         category = self.shop_tab
+        if category == "shield":
+            item = self.shop.get_item("shield", item_id)
+            if item and self.shop.purchase_shield(item_id):
+                self.sounds.play("purchase")
+                self._shop_message = f"Shield purchased! You have {self.shop.shields}."
+                self._save_progress()
+            else:
+                self.sounds.play("button_click")
+                self._shop_message = "Not enough coins for a shield."
+            return
+
         if self.shop.is_owned(category, item_id):
             if self.shop.equip(category, item_id):
                 self.sounds.play("button_click")
@@ -817,7 +964,10 @@ class Game:
                 self.sounds.play("button_click")  # can't afford - soft click, no crash
 
     def _apply_equipped_cosmetics(self):
-        self.player.set_skin(*self.shop.get_equipped_bow_colors())
+        self.player.set_skin(
+            *self.shop.get_equipped_bow_colors(),
+            skin_id=self.shop.equipped_id("bow"),
+        )
         self.player.set_body_color(self.shop.get_equipped_player_color())
         self.background.set_theme(self.shop.get_equipped_background_id())
 
@@ -829,18 +979,41 @@ class Game:
         for key, button in self.shop_tab_buttons.items():
             button.base_color = settings.COLOR_ACCENT if self.shop_tab == key else settings.COLOR_BUTTON
             button.draw(self.screen)
+        if self.shop_tab == "bow":
+            self.godly_code_input.draw(self.screen)
+            self.godly_code_button.draw(self.screen)
+        if self.shop_tab == "bow" and self._godly_code_message:
+            message = self._font_small.render(self._godly_code_message, True, (170, 240, 255))
+            self.screen.blit(message, message.get_rect(midleft=(settings.SCREEN_WIDTH // 2 + 310, 186)))
+        elif self.shop_tab == "shield" and self._shop_message:
+            message = self._font_small.render(self._shop_message, True, (170, 240, 255))
+            self.screen.blit(message, message.get_rect(center=(settings.SCREEN_WIDTH // 2, 225)))
 
         draw_fn = {
             "bow": ui.draw_skin_card,
             "color": ui.draw_color_card,
             "background": ui.draw_background_card,
+            "shield": ui.draw_shield_card,
         }[self.shop_tab]
 
         for item, rect in self._shop_card_layout:
-            owned = self.shop.is_owned(self.shop_tab, item["id"])
-            equipped = self.shop.equipped_id(self.shop_tab) == item["id"]
             affordable = self.shop.can_afford(self.shop_tab, item["id"])
-            draw_fn(self.screen, rect, self._font_body, self._font_small, item, owned, equipped, affordable)
+            if self.shop_tab == "shield":
+                draw_fn(
+                    self.screen, rect, self._font_body, self._font_small,
+                    item, self.shop.shields, affordable,
+                )
+            elif self.shop_tab == "bow":
+                owned = self.shop.is_owned(self.shop_tab, item["id"])
+                equipped = self.shop.equipped_id(self.shop_tab) == item["id"]
+                draw_fn(
+                    self.screen, rect, self._font_body, self._font_small, item,
+                    owned, equipped, affordable, self.animation_time,
+                )
+            else:
+                owned = self.shop.is_owned(self.shop_tab, item["id"])
+                equipped = self.shop.equipped_id(self.shop_tab) == item["id"]
+                draw_fn(self.screen, rect, self._font_body, self._font_small, item, owned, equipped, affordable)
 
         self.shop_back_button.draw(self.screen)
 
@@ -851,14 +1024,30 @@ class Game:
             "sound_toggle": Button((cx - 130, 220, 260, 50), "SOUND: ON", self._font_button),
             "volume_down": Button((cx - 130, 290, 60, 50), "-", self._font_button),
             "volume_up": Button((cx + 70, 290, 60, 50), "+", self._font_button),
-            "back": Button((cx - 130, 400, 260, 50), "BACK", self._font_button),
+            "reset_data": Button(
+                (cx - 130, 380, 260, 50), "RESET DATA", self._font_button,
+                base_color=(145, 50, 45),
+            ),
+            "back": Button((cx - 130, 450, 260, 50), "BACK", self._font_button),
         }
         return widgets
 
     def _events_settings(self, event):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            self.state = self._settings_return_state
+            if self._confirming_data_reset:
+                self._confirming_data_reset = False
+            else:
+                self.state = self._settings_return_state
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self._confirming_data_reset:
+                if self.reset_cancel_button.is_clicked(event.pos):
+                    self._confirming_data_reset = False
+                    self.sounds.play("button_click")
+                elif self.reset_confirm_button.is_clicked(event.pos):
+                    self.sounds.play("button_click")
+                    self._reset_saved_data()
+                return
+
             for key, widget in self.settings_widgets.items():
                 if widget.is_clicked(event.pos):
                     self.sounds.play("button_click")
@@ -872,24 +1061,60 @@ class Game:
             self.sounds.adjust_volume(-0.1)
         elif key == "volume_up":
             self.sounds.adjust_volume(0.1)
+        elif key == "reset_data":
+            self._confirming_data_reset = True
         elif key == "back":
             self.state = self._settings_return_state
+
+    def _reset_saved_data(self):
+        self.progress_data = progress.reset()
+        self.shop = ShopManager(self.progress_data)
+        self.highest_level = self.progress_data["highest_level"]
+        self.player_name_input.text = self.shop.player_name
+        self.opponent_name_input.text = self.shop.opponent_name
+        self.player_name_input.active = False
+        self.opponent_name_input.active = False
+        self._apply_equipped_cosmetics()
+        self._start_level(1)
+        self._confirming_data_reset = False
+        self._settings_return_state = GameState.MENU
+        self.state = GameState.MENU
 
     def _update_settings_buttons(self, dt):
         mouse_pos = pygame.mouse.get_pos()
         for widget in self.settings_widgets.values():
             widget.update(mouse_pos, dt)
+        if self._confirming_data_reset:
+            self.reset_cancel_button.update(mouse_pos, dt)
+            self.reset_confirm_button.update(mouse_pos, dt)
         self.settings_widgets["sound_toggle"].text = f"SOUND: {'ON' if self.sounds.enabled else 'OFF'}"
 
     def _draw_settings(self):
         self.background.draw(self.screen)
         draw_outlined_text(self.screen, self._font_title, "SETTINGS", settings.COLOR_WHITE, (settings.SCREEN_WIDTH // 2, 110))
-        for key in ("sound_toggle", "volume_down", "volume_up", "back"):
+        for key in ("sound_toggle", "volume_down", "volume_up", "reset_data", "back"):
             self.settings_widgets[key].draw(self.screen)
 
         volume_label = self._font_body.render(f"Volume: {int(self.sounds.volume * 100)}%", True, settings.COLOR_WHITE)
         rect = volume_label.get_rect(center=(settings.SCREEN_WIDTH // 2, 315))
         self.screen.blit(volume_label, rect)
+        if self._confirming_data_reset:
+            overlay = pygame.Surface((settings.SCREEN_WIDTH, settings.SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill(settings.COLOR_OVERLAY)
+            self.screen.blit(overlay, (0, 0))
+            panel_rect = (settings.SCREEN_WIDTH // 2 - 260, 245, 520, 230)
+            draw_rounded_panel(self.screen, panel_rect, (35, 50, 38, 245), radius=18, shadow=True)
+            pygame.draw.rect(self.screen, settings.COLOR_ACCENT, panel_rect, width=2, border_radius=18)
+            draw_outlined_text(
+                self.screen, self._font_body, "Reset all saved progress?",
+                settings.COLOR_WHITE, (settings.SCREEN_WIDTH // 2, 300),
+            )
+            draw_text_with_shadow(
+                self.screen, self._font_small, "Coins, levels, names, and purchases will be erased.",
+                settings.COLOR_WHITE, (settings.SCREEN_WIDTH // 2, 350), center=True,
+            )
+            self.reset_cancel_button.draw(self.screen)
+            self.reset_confirm_button.draw(self.screen)
 
     
     def _events_info_screen(self, event):
